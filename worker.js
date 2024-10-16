@@ -338,7 +338,7 @@ function getRootHtml() {
           }
           const encodedUrl = encodeURIComponent(targetUrl);
           const currentOrigin = window.location.origin;
-          window.open(\`${currentOrigin}/${encodedUrl}\`, '_blank');
+          window.open(currentOrigin} + '/' + encodedUrl, '_blank');
       }
   </script>
 </body>
