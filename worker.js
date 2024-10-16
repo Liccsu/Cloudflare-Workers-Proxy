@@ -2,13 +2,8 @@ addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request));
 });
 
-// 限制可代理的域名列表
-// const ALLOWED_DOMAINS = [
-//   "github.com",
-//   "www.github.com",
-//   "i.pximg.net",
-//   "i-cf.pximg.net"
-// ];
+// 常量：代理域名
+const PROXY_DOMAIN = "";
 
 // 特殊处理规则
 const specialCases = {
@@ -109,12 +104,6 @@ async function handleRequest(request) {
 
     // 解析目标 URL
     const targetUrl = new URL(actualUrlStr);
-
-    // 安全性检查：限制可代理的域名
-    // if (!ALLOWED_DOMAINS.includes(targetUrl.hostname)) {
-    //   console.warn(`阻止代理访问不允许的域名: ${targetUrl.hostname}`);
-    //   return jsonResponse({ error: "Access to this domain is not allowed." }, 403);
-    // }
 
     // 保留查询参数
     actualUrlStr += url.search;
@@ -349,7 +338,7 @@ function getRootHtml() {
           }
           const encodedUrl = encodeURIComponent(targetUrl);
           const currentOrigin = window.location.origin;
-          window.open(`${currentOrigin}/${encodedUrl}`, '_blank');
+          window.open(\`${currentOrigin}/${encodedUrl}\`, '_blank');
       }
   </script>
 </body>
