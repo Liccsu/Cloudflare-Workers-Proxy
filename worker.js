@@ -2,71 +2,175 @@ addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request));
 });
 
+// 限制可代理的域名列表
+// const ALLOWED_DOMAINS = [
+//   "github.com",
+//   "www.github.com",
+//   "i.pximg.net",
+//   "i-cf.pximg.net"
+// ];
+
+// 特殊处理规则
+const specialCases = {
+  "i.pximg.net": {
+    "Origin": "DELETE",
+    "Referer": "https://www.pixiv.net/"
+  },
+  "i-cf.pximg.net": {
+    "Origin": "DELETE",
+    "Referer": "https://www.pixiv.net/"
+  },
+  "*": {
+    "Origin": "DELETE",
+    "Referer": "DELETE"
+  }
+};
+
+// 处理请求头中的特殊规则
+function handleSpecialCases(request) {
+  const url = new URL(request.url);
+  const rules = specialCases[url.hostname] || specialCases["*"];
+  for (const [key, value] of Object.entries(rules)) {
+    switch (value) {
+      case "KEEP":
+        break;
+      case "DELETE":
+        request.headers.delete(key);
+        break;
+      default:
+        request.headers.set(key, value);
+        break;
+    }
+  }
+}
+
+// 处理 Set-Cookie 头，重写 Domain 和 Path
+function handleSetCookieHeaders(response) {
+  const newHeaders = new Headers(response.headers);
+
+  // 删除旧的 Set-Cookie 头
+  const setCookies = response.headers.getAll('Set-Cookie');
+  newHeaders.delete('Set-Cookie');
+
+  // 逐个处理 Set-Cookie 头
+  setCookies.forEach(cookie => {
+    let modifiedCookie = cookie;
+
+    // 重写 Domain 属性为代理域名
+    if (cookie.toLowerCase().includes('domain=')) {
+      modifiedCookie = cookie.replace(/domain=[^;]+/i, `domain=${PROXY_DOMAIN}`);
+    } else {
+      // 如果没有指定 Domain，则设置为代理域名
+      modifiedCookie += `; Domain=${PROXY_DOMAIN}`;
+    }
+
+    // 确保 Path 属性指向代理路径
+    if (!/path=/i.test(modifiedCookie)) {
+      modifiedCookie += `; Path=/`;
+    }
+
+    // 可选：添加 Secure 属性（确保仅通过 HTTPS 传输）
+    // if (!/secure/i.test(modifiedCookie)) {
+    //   modifiedCookie += `; Secure`;
+    // }
+
+    newHeaders.append('Set-Cookie', modifiedCookie);
+  });
+
+  return newHeaders;
+}
+
+// 处理请求
 async function handleRequest(request) {
   try {
-      const url = new URL(request.url);
+    const url = new URL(request.url);
 
-      // 如果访问根目录，返回HTML
-      if (url.pathname === "/") {
-          return new Response(getRootHtml(), {
-              headers: {
-                  'Content-Type': 'text/html; charset=utf-8'
-              }
-          });
-      }
-
-      // 从请求路径中提取目标 URL
-      let actualUrlStr = decodeURIComponent(url.pathname.replace("/", ""));
-
-      // 判断用户输入的 URL 是否带有协议
-      actualUrlStr = ensureProtocol(actualUrlStr, url.protocol);
-
-      // 保留查询参数
-      actualUrlStr += url.search;
-
-      // 创建新 Headers 对象，排除以 'cf-' 开头的请求头
-      const newHeaders = filterHeaders(request.headers, name => !name.startsWith('cf-'));
-
-      // 创建一个新的请求以访问目标 URL
-      const modifiedRequest = new Request(actualUrlStr, {
-          headers: newHeaders,
-          method: request.method,
-          body: request.body,
-          redirect: 'manual'
+    // 如果访问根目录，返回HTML
+    if (url.pathname === "/") {
+      return new Response(getRootHtml(), {
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8'
+        }
       });
+    }
 
-      // 发起对目标 URL 的请求
-      const response = await fetch(modifiedRequest);
-      let body = response.body;
+    // 从请求路径中提取目标 URL
+    const encodedActualUrlStr = url.pathname.slice(1); // 移除前导 '/'
+    let actualUrlStr;
+    try {
+      actualUrlStr = decodeURIComponent(encodedActualUrlStr);
+    } catch (e) {
+      console.error('URL 解码失败:', e);
+      return jsonResponse({ error: "Invalid URL encoding." }, 400);
+    }
 
-      // 处理重定向
-      if ([301, 302, 303, 307, 308].includes(response.status)) {
-          body = response.body;
-          // 创建新的 Response 对象以修改 Location 头部
-          return handleRedirect(response, body);
-      } else if (response.headers.get("Content-Type")?.includes("text/html")) {
-          body = await handleHtmlContent(response, url.protocol, url.host, actualUrlStr);
-      }
+    // 判断用户输入的 URL 是否带有协议
+    actualUrlStr = ensureProtocol(actualUrlStr, url.protocol);
 
-      // 创建修改后的响应对象
-      const modifiedResponse = new Response(body, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers
-      });
+    // 解析目标 URL
+    const targetUrl = new URL(actualUrlStr);
 
-      // 添加禁用缓存的头部
-      setNoCacheHeaders(modifiedResponse.headers);
+    // 安全性检查：限制可代理的域名
+    // if (!ALLOWED_DOMAINS.includes(targetUrl.hostname)) {
+    //   console.warn(`阻止代理访问不允许的域名: ${targetUrl.hostname}`);
+    //   return jsonResponse({ error: "Access to this domain is not allowed." }, 403);
+    // }
 
-      // 添加 CORS 头部，允许跨域访问
-      setCorsHeaders(modifiedResponse.headers);
+    // 保留查询参数
+    actualUrlStr += url.search;
 
-      return modifiedResponse;
+    // 创建新 Headers 对象，排除以 'cf-' 开头的请求头
+    const newHeaders = filterHeaders(request.headers, name => !name.toLowerCase().startsWith('cf-'));
+
+    // 创建一个新的请求以访问目标 URL
+    const modifiedRequest = new Request(actualUrlStr, {
+      headers: newHeaders,
+      method: request.method,
+      body: request.method === 'GET' || request.method === 'HEAD' ? null : request.body,
+      redirect: 'manual' // 处理重定向
+    });
+
+    // 处理特殊请求头
+    handleSpecialCases(modifiedRequest);
+
+    // 发起对目标 URL 的请求
+    const response = await fetch(modifiedRequest);
+
+    // 处理 Set-Cookie 头
+    const headersWithCookies = handleSetCookieHeaders(response);
+
+    let body;
+
+    // 处理重定向
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      return handleRedirect(response);
+    } else if (response.headers.get("Content-Type")?.includes("text/html")) {
+      // 处理 HTML 内容中的相对路径
+      body = await handleHtmlContent(response, url.protocol, url.host, actualUrlStr);
+      headersWithCookies.set('Content-Length', new TextEncoder().encode(body).length.toString());
+    } else {
+      // 对于非 HTML 内容，直接流式传输
+      body = response.body;
+    }
+
+    // 创建修改后的响应对象
+    const modifiedResponse = new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: headersWithCookies
+    });
+
+    // 添加禁用缓存的头部
+    setNoCacheHeaders(modifiedResponse.headers);
+
+    // 添加 CORS 头部，允许跨域访问
+    setCorsHeaders(modifiedResponse.headers);
+
+    return modifiedResponse;
   } catch (error) {
-      // 如果请求目标地址时出现错误，返回带有错误消息的响应和状态码 500（服务器错误）
-      return jsonResponse({
-          error: error.message
-      }, 500);
+    console.error('请求处理失败:', error);
+    // 如果请求目标地址时出现错误，返回带有错误消息的响应和状态码 500（服务器错误）
+    return jsonResponse({ error: error.message }, 500);
   }
 }
 
@@ -76,41 +180,66 @@ function ensureProtocol(url, defaultProtocol) {
 }
 
 // 处理重定向
-function handleRedirect(response, body) {
-  const location = new URL(response.headers.get('location'));
-  const modifiedLocation = `/${encodeURIComponent(location.toString())}`;
-  return new Response(body, {
+function handleRedirect(response) {
+  const location = response.headers.get('location');
+  if (!location) {
+    return new Response(null, {
       status: response.status,
       statusText: response.statusText,
-      headers: {
-          ...response.headers,
-          'Location': modifiedLocation
-      }
+      headers: response.headers
+    });
+  }
+
+  let modifiedLocation;
+  try {
+    // 判断重定向 URL 是否为绝对 URL
+    const locationUrl = new URL(location, response.url);
+    modifiedLocation = `/${encodeURIComponent(locationUrl.toString())}`;
+  } catch (e) {
+    // 如果是相对 URL，构建绝对 URL
+    const baseUrl = new URL(response.url);
+    const absoluteUrl = new URL(location, baseUrl);
+    modifiedLocation = `/${encodeURIComponent(absoluteUrl.toString())}`;
+  }
+
+  // 移除旧的 Location 头，并设置新的
+  const newHeaders = new Headers(response.headers);
+  newHeaders.set('Location', modifiedLocation);
+
+  return new Response(null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: newHeaders
   });
 }
 
 // 处理 HTML 内容中的相对路径
 async function handleHtmlContent(response, protocol, host, actualUrlStr) {
   const originalText = await response.text();
-  const regex = new RegExp('((href|src|action)=["\'])/(?!/)', 'g');
-  let modifiedText = replaceRelativePaths(originalText, protocol, host, new URL(actualUrlStr).origin);
+  const targetOrigin = new URL(actualUrlStr).origin;
+  const encodedOrigin = encodeURIComponent(targetOrigin);
+
+  // 替换 href、src 和 action 属性中以 / 开头的相对路径
+  const regex = /((href|src|action)=["'])\/(?!\/)/g;
+  let modifiedText = originalText.replace(regex, `\$1/${encodedOrigin}/`);
+
+  // 处理协议相对 URL，如 //example.com/path
+  const protocolRelativeRegex = /((href|src|action)=["'])\/\/([^\/"']+)/g;
+  modifiedText = modifiedText.replace(protocolRelativeRegex, (match, p1, p2) => {
+    const newUrl = `/${encodeURIComponent(`https://${p2}`)}`;
+    return `${p1}${newUrl}`;
+  });
 
   return modifiedText;
-}
-
-// 替换 HTML 内容中的相对路径
-function replaceRelativePaths(text, protocol, host, origin) {
-  const regex = new RegExp('((href|src|action)=["\'])/(?!/)', 'g');
-  return text.replace(regex, `$1${protocol}//${host}/${origin}/`);
 }
 
 // 返回 JSON 格式的响应
 function jsonResponse(data, status) {
   return new Response(JSON.stringify(data), {
-      status: status,
-      headers: {
-          'Content-Type': 'application/json; charset=utf-8'
-      }
+    status: status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8'
+    }
   });
 }
 
@@ -139,7 +268,7 @@ function getRootHtml() {
   <meta charset="UTF-8">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css" rel="stylesheet">
   <title>Proxy Everything</title>
-  <link rel="icon" type="image/png" href="https://img.icons8.com/color/1000/kawaii-bread-1.png">
+  <link rel="icon" type="image/png" href="https://s2.loli.net/2024/09/20/pgXFKc6UOASTyI9.png">
   <meta name="Description" content="Proxy Everything with CF Workers.">
   <meta property="og:description" content="Proxy Everything with CF Workers.">
   <meta property="og:image" content="https://img.icons8.com/color/1000/kawaii-bread-1.png">
@@ -183,6 +312,9 @@ function getRootHtml() {
           border-bottom: 1px solid #2c3e50 !important;
           box-shadow: 0 1px 0 0 #2c3e50 !important;
       }
+      .full-width {
+          width: 100%;
+      }
   </style>
 </head>
 <body>
@@ -211,8 +343,13 @@ function getRootHtml() {
       function redirectToProxy(event) {
           event.preventDefault();
           const targetUrl = document.getElementById('targetUrl').value.trim();
+          if (!targetUrl) {
+              alert('请输入有效的URL');
+              return;
+          }
+          const encodedUrl = encodeURIComponent(targetUrl);
           const currentOrigin = window.location.origin;
-          window.open(currentOrigin + '/' + encodeURIComponent(targetUrl), '_blank');
+          window.open(`${currentOrigin}/${encodedUrl}`, '_blank');
       }
   </script>
 </body>
