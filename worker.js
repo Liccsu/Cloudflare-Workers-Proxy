@@ -132,7 +132,7 @@ async function handleRequest(request) {
 
     // 处理重定向
     if ([301, 302, 303, 307, 308].includes(response.status)) {
-      return handleRedirect(response);
+      return handleRedirect(response, url.origin);
     } else if (response.headers.get("Content-Type")?.includes("text/html")) {
       // 处理 HTML 内容中的相对路径
       body = await handleHtmlContent(response, url.protocol, url.host, actualUrlStr);
@@ -169,7 +169,7 @@ function ensureProtocol(url, defaultProtocol) {
 }
 
 // 处理重定向
-function handleRedirect(response) {
+function handleRedirect(response, origin) {
   const location = response.headers.get('location');
   if (!location) {
     return new Response(null, {
@@ -183,12 +183,13 @@ function handleRedirect(response) {
   try {
     // 判断重定向 URL 是否为绝对 URL
     const locationUrl = new URL(location, response.url);
-    modifiedLocation = `/${encodeURIComponent(locationUrl.toString())}`;
+    // 使用代理的原始域名加上编码后的目标 URL
+    modifiedLocation = `${origin}/${encodeURIComponent(locationUrl.toString())}`;
   } catch (e) {
     // 如果是相对 URL，构建绝对 URL
     const baseUrl = new URL(response.url);
     const absoluteUrl = new URL(location, baseUrl);
-    modifiedLocation = `/${encodeURIComponent(absoluteUrl.toString())}`;
+    modifiedLocation = `${origin}/${encodeURIComponent(absoluteUrl.toString())}`;
   }
 
   // 移除旧的 Location 头，并设置新的
@@ -291,6 +292,39 @@ function getRootHtml() {
           background-color: rgba(255, 255, 255, 1);
           box-shadow: 0px 8px 16px rgba(0, 0, 0, 0.3);
       }
+
+      /* 设置 placeholder 文本颜色 */
+      .input-field input[type=text]::placeholder {
+          color: #555; /* 更深的灰色 */
+          opacity: 1; /* 确保颜色完全应用 */
+      }
+
+      /* 供应商前缀，确保更好的兼容性 */
+      .input-field input[type=text]::-webkit-input-placeholder {
+          color: #555;
+          opacity: 1;
+      }
+      .input-field input[type=text]::-moz-placeholder {
+          color: #555;
+          opacity: 1;
+      }
+      .input-field input[type=text]:-ms-input-placeholder {
+          color: #555;
+          opacity: 1;
+      }
+      .input-field input[type=text]:-moz-placeholder {
+          color: #555;
+          opacity: 1;
+      }
+      /* 悬停时 */
+      .input-field input[type=text]:hover::placeholder {
+          color: #666;
+      }
+
+      /* 聚焦时 */
+      .input-field input[type=text]:focus::placeholder {
+          color: #888;
+      }
       .input-field input[type=text] {
           color: #2c3e50;
       }
@@ -313,7 +347,7 @@ function getRootHtml() {
               <div class="col s12 m8 offset-m2 l6 offset-l3">
                   <div class="card">
                       <div class="card-content">
-                          <span class="card-title center-align"><i class="material-icons left">link</i>Proxy Everything</span>
+                          <span class="card-title center-align">Proxy Everything</span>
                           <form id="urlForm" onsubmit="redirectToProxy(event)">
                               <div class="input-field">
                                   <input type="text" id="targetUrl" placeholder="在此输入目标地址" required>
